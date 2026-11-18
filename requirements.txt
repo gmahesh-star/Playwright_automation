@@ -1,0 +1,33 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Async SQLite (local file DB — no server needed)
+sqlalchemy[asyncio]==2.0.36
+aiosqlite==0.20.0
+alembic==1.14.1
+
+# Redis & background tasks
+redis[hiredis]==5.2.1
+arq==0.26.1
+
+# Playwright
+playwright==1.49.1
+
+# Pydantic
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Image comparison (visual regression)
+Pillow==11.1.0
+pixelmatch==0.3.0
+
+# WebSocket support (included in FastAPI/Starlette)
+websockets==14.1
+
+# Utilities
+orjson==3.10.13
+python-dateutil==2.9.0
+aiofiles==24.1.0
+httpx==0.28.1

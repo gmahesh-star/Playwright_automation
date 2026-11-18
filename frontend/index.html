@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playwright Testing Platform</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+</head>
+<body>
+
+  <!-- ═══ TOP HEADER BAR ═══ -->
+  <header class="top-header">
+    <div class="header-left">
+      <button class="hamburger" onclick="toggleSidebar()">
+        <span class="material-icons-outlined">menu</span>
+      </button>
+      <div class="breadcrumb">
+        <span class="material-icons-outlined" style="font-size:18px">home</span>
+        <span class="bc-label" id="bc-project">Project</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="header-icon" title="Notifications">
+        <span class="material-icons-outlined">notifications</span>
+        <span class="notif-badge">3</span>
+      </div>
+      <div class="header-icon" title="Documentation">
+        <span class="material-icons-outlined">description</span>
+      </div>
+      <div class="user-info">
+        <div class="user-avatar">M</div>
+        <span class="user-name">Mahesh</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 48 48" width="44" height="44">
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#ff6b6b" stroke-width="3" stroke-dasharray="20 100" transform="rotate(-90 24 24)"/>
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#ffd93d" stroke-width="3" stroke-dasharray="20 100" stroke-dashoffset="-20" transform="rotate(-90 24 24)"/>
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#6bcb77" stroke-width="3" stroke-dasharray="20 100" stroke-dashoffset="-40" transform="rotate(-90 24 24)"/>
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#4d96ff" stroke-width="3" stroke-dasharray="20 100" stroke-dashoffset="-60" transform="rotate(-90 24 24)"/>
+          <text x="24" y="28" text-anchor="middle" fill="white" font-size="11" font-weight="700">PW</text>
+        </svg>
+      </div>
+      <div class="project-name" id="sidebar-project-name">Playwright Platform</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a class="nav-item active" data-page="tests" onclick="navigate('tests')">
+        <span class="material-icons-outlined">science</span>
+        <span>Tests</span>
+      </a>
+      <a class="nav-item" data-page="recorder" onclick="navigate('recorder')">
+        <span class="material-icons-outlined">fiber_manual_record</span>
+        <span>Recorder</span>
+      </a>
+      <a class="nav-item" data-page="runs" onclick="navigate('runs')">
+        <span class="material-icons-outlined">play_circle</span>
+        <span>Execution Runs</span>
+      </a>
+      <a class="nav-item" data-page="codegen" onclick="navigate('codegen')">
+        <span class="material-icons-outlined">code</span>
+        <span>Code Export</span>
+      </a>
+      <a class="nav-item" data-page="auth" onclick="navigate('auth')">
+        <span class="material-icons-outlined">vpn_key</span>
+        <span>Auth Profiles</span>
+      </a>
+      <a class="nav-item" data-page="settings" onclick="navigate('settings')">
+        <span class="material-icons-outlined">settings</span>
+        <span>Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a class="nav-item" onclick="openSwagger()">
+        <span class="material-icons-outlined">api</span>
+        <span>API Docs</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN CONTENT ═══ -->
+  <main class="main-content" id="main-content">
+
+    <!-- ═══ TESTS PAGE (3-panel layout) ═══ -->
+    <div class="page page-tests" id="page-tests">
+      <!-- Panel 1: Projects (Collections) -->
+      <div class="panel panel-projects">
+        <div class="panel-header">
+          <h2 class="panel-title">Projects</h2>
+          <div class="panel-actions">
+            <button class="icon-btn" title="Search" onclick="toggleSearch('projects')">
+              <span class="material-icons-outlined">search</span>
+            </button>
+            <button class="icon-btn" title="Filter">
+              <span class="material-icons-outlined">filter_list</span>
+            </button>
+            <button class="icon-btn" title="Sort">
+              <span class="material-icons-outlined">sort</span>
+            </button>
+            <button class="icon-btn btn-add" title="Add Project" onclick="showModal('project')">
+              <span class="material-icons-outlined">add</span>
+            </button>
+          </div>
+        </div>
+        <div class="panel-search" id="search-projects" style="display:none">
+          <input type="text" placeholder="Search projects..." oninput="filterList('projects', this.value)">
+        </div>
+        <div class="panel-body" id="projects-list">
+          <div class="empty-state">Loading...</div>
+        </div>
+        <div class="panel-footer">
+          <div class="pagination-info" id="projects-pagination">0 of 0</div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Test Suites -->
+      <div class="panel panel-suites">
+        <div class="panel-header">
+          <h2 class="panel-title">Suites</h2>
+          <div class="panel-actions">
+            <button class="icon-btn" title="Search" onclick="toggleSearch('suites')">
+              <span class="material-icons-outlined">search</span>
+            </button>
+            <button class="icon-btn" title="Filter">
+              <span class="material-icons-outlined">filter_list</span>
+            </button>
+            <button class="icon-btn" title="Sort">
+              <span class="material-icons-outlined">sort</span>
+            </button>
+            <button class="icon-btn" title="Run Suite" id="btn-run-suite" style="display:none" onclick="runSelectedSuite()">
+              <span class="material-icons-outlined">play_arrow</span>
+            </button>
+            <button class="icon-btn btn-add" title="Add Suite" onclick="showModal('suite')">
+              <span class="material-icons-outlined">add</span>
+            </button>
+          </div>
+        </div>
+        <div class="panel-search" id="search-suites" style="display:none">
+          <input type="text" placeholder="Search suites..." oninput="filterList('suites', this.value)">
+        </div>
+        <div class="panel-body" id="suites-list">
+          <div class="empty-state">Please select a Project to view its Test Suites.</div>
+        </div>
+        <div class="panel-footer">
+          <div class="pagination-info" id="suites-pagination">0 of 0</div>
+        </div>
+      </div>
+
+      <!-- Panel 3: Test Cases (Test Scripts) -->
+      <div class="panel panel-tests">
+        <div class="panel-header-top">
+          <div class="panel-breadcrumb">
+            <span class="material-icons-outlined bc-icon" onclick="clearTestSelection()">home</span>
+            <span class="bc-sep">&gt;&gt;</span>
+            <span class="bc-text" id="bc-sel-project">—</span>
+            <span class="bc-sep">&gt;&gt;</span>
+            <span class="bc-text" id="bc-sel-suite">—</span>
+          </div>
+          <div class="panel-top-search">
+            <input type="text" placeholder="Search..." oninput="filterList('tests', this.value)">
+            <span class="material-icons-outlined">search</span>
+          </div>
+        </div>
+        <div class="panel-header">
+          <h2 class="panel-title">Test Cases</h2>
+          <div class="panel-actions">
+            <button class="icon-btn" title="Filter">
+              <span class="material-icons-outlined">filter_list</span>
+            </button>
+            <button class="icon-btn" title="Sort">
+              <span class="material-icons-outlined">sort</span>
+            </button>
+            <button class="icon-btn" title="Export Code" id="btn-export" style="display:none" onclick="exportSelectedTest()">
+              <span class="material-icons-outlined">download</span>
+            </button>
+            <button class="icon-btn" title="Run Test" id="btn-run-test" style="display:none">
+              <span class="material-icons-outlined">play_arrow</span>
+            </button>
+            <button class="icon-btn btn-add" title="Add Test Case" onclick="showModal('test')">
+              <span class="material-icons-outlined">add</span>
+            </button>
+          </div>
+        </div>
+        <div class="panel-body panel-body-table" id="tests-panel">
+          <table class="data-table" id="tests-table">
+            <thead>
+              <tr>
+                <th style="width:40px"><input type="checkbox" id="select-all-tests"></th>
+                <th style="width:60px">Sr.No.</th>
+                <th>Test Case</th>
+                <th style="width:120px">Steps</th>
+                <th style="width:160px">Description</th>
+                <th style="width:70px">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tests-tbody">
+            </tbody>
+          </table>
+          <div class="empty-state" id="tests-empty">
+            Please select a Project and then a Test Suite to view its Test Cases.
+          </div>
+        </div>
+        <div class="panel-footer panel-footer-right">
+          <span class="items-label">Items per page</span>
+          <select class="items-select" id="tests-per-page">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="25">25</option>
+          </select>
+          <span class="pagination-info" id="tests-pagination">0 of 0</span>
+          <div class="pagination-btns">
+            <button class="pg-btn" title="First">&lt;</button>
+            <button class="pg-btn" title="Prev">&lsaquo;</button>
+            <button class="pg-btn" title="Next">&rsaquo;</button>
+            <button class="pg-btn" title="Last">&gt;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ RECORDER PAGE ═══ -->
+    <div class="page page-recorder" id="page-recorder" style="display:none">
+      <div class="page-single">
+        <div class="page-header">
+          <h1>Browser Recorder</h1>
+          <p class="page-subtitle">Record browser interactions and convert them into automated test cases</p>
+        </div>
+        <div class="recorder-card">
+          <div class="form-group">
+            <label>Target URL</label>
+            <input type="url" id="rec-url" placeholder="https://example.com" class="form-input">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Browser</label>
+              <select id="rec-browser" class="form-input">
+                <option value="chromium">Chromium</option>
+                <option value="firefox">Firefox</option>
+                <option value="webkit">WebKit</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Mode</label>
+              <select id="rec-headless" class="form-input">
+                <option value="false">Headed (visible browser)</option>
+                <option value="true">Headless</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary btn-lg" id="btn-rec-start" onclick="startRecording()">
+              <span class="material-icons-outlined">fiber_manual_record</span>
+              Start Recording
+            </button>
+            <button class="btn btn-danger btn-lg" id="btn-rec-stop" style="display:none" onclick="stopRecording()">
+              <span class="material-icons-outlined">stop</span>
+              Stop Recording
+            </button>
+          </div>
+        </div>
+        <div class="recorder-live" id="rec-live" style="display:none">
+          <div class="live-header">
+            <div class="live-dot"></div>
+            <span>LIVE — Recording Session</span>
+            <span class="rec-session-id" id="rec-session-id"></span>
+          </div>
+          <div class="steps-stream" id="rec-steps-stream">
+          </div>
+          <div class="rec-actions-bar">
+            <button class="btn btn-outline" onclick="showAssertionModal()">
+              <span class="material-icons-outlined">verified</span>
+              Add Assertion
+            </button>
+            <button class="btn btn-primary" id="btn-save-recording" onclick="saveRecording()">
+              <span class="material-icons-outlined">save</span>
+              Save as Test Case
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ EXECUTION RUNS PAGE ═══ -->
+    <!-- ═══ EXECUTION RUNS PAGE ═══ -->
+    <div class="page page-runs" id="page-runs" style="display:none">
+      <div class="page-single">
+        <div class="page-header">
+          <h1>Execution Runs</h1>
+          <p class="page-subtitle">View test run history, results, and download artifacts</p>
+        </div>
+        <div class="runs-toolbar">
+          <select class="form-input" id="runs-filter-status" onchange="loadRuns()">
+            <option value="">All Statuses</option>
+            <option value="pending">Pending</option>
+            <option value="running">Running</option>
+            <option value="passed">Passed</option>
+            <option value="failed">Failed</option>
+            <option value="error">Error</option>
+          </select>
+          <button class="btn btn-outline" onclick="loadRuns()">
+            <span class="material-icons-outlined">refresh</span> Refresh
+          </button>
+        </div>
+        <table class="data-table data-table-full" id="runs-table">
+          <thead>
+            <tr>
+              <th style="width:60px">Status</th>
+              <th>Run ID</th>
+              <th>Browser</th>
+              <th>Duration</th>
+              <th>Started</th>
+              <th style="width:80px">Results</th>
+              <th style="width:100px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="runs-tbody"></tbody>
+        </table>
+        <div class="empty-state" id="runs-empty">No execution runs found.</div>
+      </div>
+    </div>
+
+    <!-- ═══ RUN REPLAY PAGE (FULL PAGE) ═══ -->
+    <div class="page page-replay" id="page-replay" style="display:none">
+      <div class="page-single">
+        <!-- Back button + header -->
+        <div class="replay-header">
+          <button class="btn btn-outline" onclick="navigate('runs')">
+            <span class="material-icons-outlined">arrow_back</span> Back to Runs
+          </button>
+          <h1 id="replay-title">Run Details</h1>
+        </div>
+
+        <!-- Summary cards -->
+        <div class="replay-summary" id="replay-summary"></div>
+
+        <!-- Action buttons -->
+        <div class="replay-actions" id="replay-actions"></div>
+
+        <!-- Video player section -->
+        <div class="replay-video-section" id="replay-video-section" style="display:none">
+          <h2><span class="material-icons-outlined" style="vertical-align:middle">videocam</span> Execution Recording</h2>
+          <div class="replay-video-container">
+            <video id="replay-video" controls preload="metadata" style="width:100%;max-height:500px;border-radius:8px;background:#000"></video>
+          </div>
+        </div>
+
+        <!-- Screenshot replay section -->
+        <div class="replay-screenshots-section" id="replay-screenshots-section" style="display:none">
+          <h2><span class="material-icons-outlined" style="vertical-align:middle">photo_library</span> Step-by-Step Replay</h2>
+          <div class="replay-viewer" id="replay-viewer"></div>
+        </div>
+
+        <!-- Test results section -->
+        <div class="replay-results-section" id="replay-results-section">
+          <h2><span class="material-icons-outlined" style="vertical-align:middle">assessment</span> Test Case Results</h2>
+          <div id="replay-results"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CODE EXPORT PAGE ═══ -->
+    <div class="page page-codegen" id="page-codegen" style="display:none">
+      <div class="page-single">
+        <div class="page-header">
+          <h1>Code Export</h1>
+          <p class="page-subtitle">Export test cases as runnable pytest-playwright Python code</p>
+        </div>
+        <div class="codegen-selector">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Select Test Case</label>
+              <select id="codegen-test" class="form-input" onchange="previewCode()">
+                <option value="">— Select a test case —</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Language</label>
+              <select id="codegen-lang" class="form-input">
+                <option value="python">Python (pytest-playwright)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="code-preview" id="code-preview" style="display:none">
+          <div class="code-header">
+            <span class="code-filename" id="code-filename">test_example.py</span>
+            <button class="btn btn-outline btn-sm" onclick="copyCode()">
+              <span class="material-icons-outlined">content_copy</span> Copy
+            </button>
+            <button class="btn btn-primary btn-sm" onclick="downloadCode()">
+              <span class="material-icons-outlined">download</span> Download
+            </button>
+          </div>
+          <pre class="code-block"><code id="code-content"></code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ AUTH PROFILES PAGE ═══ -->
+    <div class="page page-auth" id="page-auth" style="display:none">
+      <div class="page-single">
+        <div class="page-header">
+          <h1>Auth Profiles</h1>
+          <p class="page-subtitle">Manage saved authentication sessions to skip login flows in tests</p>
+          <button class="btn btn-primary" onclick="showModal('auth-profile')">
+            <span class="material-icons-outlined">add</span> New Profile
+          </button>
+        </div>
+        <table class="data-table data-table-full">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Project</th>
+              <th>Description</th>
+              <th>State File</th>
+              <th>Created</th>
+              <th style="width:80px">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="auth-tbody"></tbody>
+        </table>
+        <div class="empty-state" id="auth-empty">No auth profiles found. Create one to reuse login sessions.</div>
+      </div>
+    </div>
+
+    <!-- ═══ SETTINGS PAGE ═══ -->
+    <div class="page page-settings" id="page-settings" style="display:none">
+      <div class="page-single">
+        <div class="page-header">
+          <h1>Settings</h1>
+          <p class="page-subtitle">Platform configuration and status</p>
+        </div>
+        <div class="settings-grid">
+          <div class="settings-card">
+            <h3>Database</h3>
+            <div class="setting-row"><span class="setting-label">Engine</span><span class="setting-value">SQLite (local)</span></div>
+            <div class="setting-row"><span class="setting-label">File</span><span class="setting-value">playwright_platform.db</span></div>
+          </div>
+          <div class="settings-card">
+            <h3>Playwright</h3>
+            <div class="setting-row"><span class="setting-label">Default Browser</span><span class="setting-value">Chromium</span></div>
+            <div class="setting-row"><span class="setting-label">Default Timeout</span><span class="setting-value">30s</span></div>
+            <div class="setting-row"><span class="setting-label">Headless</span><span class="setting-value">Yes</span></div>
+          </div>
+          <div class="settings-card">
+            <h3>Visual Regression</h3>
+            <div class="setting-row"><span class="setting-label">Diff Threshold</span><span class="setting-value">10%</span></div>
+          </div>
+          <div class="settings-card">
+            <h3>Artifacts</h3>
+            <div class="setting-row"><span class="setting-label">Directory</span><span class="setting-value">./artifacts</span></div>
+            <div class="setting-row"><span class="setting-label">Traces</span><span class="setting-value">./artifacts/traces</span></div>
+            <div class="setting-row"><span class="setting-label">Videos</span><span class="setting-value">./artifacts/videos</span></div>
+            <div class="setting-row"><span class="setting-label">Screenshots</span><span class="setting-value">./artifacts/screenshots</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══ MODAL OVERLAY ═══ -->
+  <div class="modal-overlay" id="modal-overlay" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h2 id="modal-title">Create</h2>
+        <button class="icon-btn" onclick="closeModal()">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <div class="modal-body" id="modal-body">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="modal-submit" onclick="submitModal()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TOAST ═══ -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- ═══ RUN DETAIL DRAWER ═══ -->
+  <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()">
+    <div class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-header">
+        <h2 id="drawer-title">Run Details</h2>
+        <button class="icon-btn" onclick="closeDrawer()">
+          <span class="material-icons-outlined">close</span>
+        </button>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

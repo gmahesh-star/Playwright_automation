@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pw_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pw_api
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/workspace
+      - ./artifacts:/workspace/artifacts
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///./playwright_platform.db
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACTS_DIR: /workspace/artifacts
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pw_worker
+    command: >
+      python -m arq app.workers.tasks.WorkerSettings
+    volumes:
+      - .:/workspace
+      - ./artifacts:/workspace/artifacts
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///./playwright_platform.db
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACTS_DIR: /workspace/artifacts
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redisdata:

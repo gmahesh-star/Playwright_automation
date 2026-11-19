@@ -264,3 +264,27 @@ class AuthProfile(Base):
 
     # relationships
     project: Mapped[Project] = relationship(back_populates="auth_profiles")
+
+    @property
+    def has_storage_state(self) -> bool:
+        """Whether a reusable browser session has been captured."""
+        return bool(self.storage_state_path or self.storage_state)
+
+
+class TestRunOptions(Base):
+    """Per-run execution options (retry/rerun subsets)."""
+
+    __tablename__ = "test_run_options"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("test_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("test_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    retry_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    test_case_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)

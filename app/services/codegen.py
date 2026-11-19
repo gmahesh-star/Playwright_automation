@@ -14,6 +14,7 @@ from app.schemas.test_schemas import (
     RecordedStep,
     StepAction,
 )
+from app.services.selectors import GET_BY_LABEL_PREFIX, canonicalize_selector
 
 
 class CodeGenerator:
@@ -164,6 +165,28 @@ def _esc(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+def _normalize_selector_for_codegen(selector: str) -> tuple[str, bool]:
+    """Return the canonical selector and whether it should use get_by_label()."""
+    canonical = canonicalize_selector(selector) or ""
+    if canonical.startswith(GET_BY_LABEL_PREFIX):
+        return canonical[len(GET_BY_LABEL_PREFIX):], True
+    return canonical, False
+
+
+def _gen_action(sel_raw: str, action: str, pad: str, extra_args: str = "") -> str:
+    """Generate a Playwright action line, using get_by_label() for label selectors."""
+    selector, is_label = _normalize_selector_for_codegen(sel_raw)
+    if is_label:
+        label_esc = _esc(selector)
+        if extra_args:
+            return f'{pad}await page.get_by_label("{label_esc}").{action}({extra_args})'
+        return f'{pad}await page.get_by_label("{label_esc}").{action}()'
+    sel = _esc(selector)
+    if extra_args:
+        return f'{pad}await page.{action}("{sel}", {extra_args})'
+    return f'{pad}await page.{action}("{sel}")'
+
+
 def _generate_step_code(step: RecordedStep, indent: int = 4) -> list[str]:
     """Generate Python code lines for a single step."""
     pad = " " * indent
@@ -175,45 +198,45 @@ def _generate_step_code(step: RecordedStep, indent: int = 4) -> list[str]:
             lines.append(f'{pad}await page.goto("{url}", wait_until="domcontentloaded")')
 
         case StepAction.CLICK:
-            sel = _esc(step.selector or "")
-            lines.append(f'{pad}await page.click("{sel}")')
+            sel = step.selector or ""
+            lines.append(_gen_action(sel, "click", pad))
 
         case StepAction.FILL:
-            sel = _esc(step.selector or "")
+            sel = step.selector or ""
             val = _esc(step.value or "")
-            lines.append(f'{pad}await page.fill("{sel}", "{val}")')
+            lines.append(_gen_action(sel, "fill", pad, f'"{val}"'))
 
         case StepAction.SELECT_OPTION:
-            sel = _esc(step.selector or "")
+            sel = step.selector or ""
             val = _esc(step.value or "")
-            lines.append(f'{pad}await page.select_option("{sel}", "{val}")')
+            lines.append(_gen_action(sel, "select_option", pad, f'"{val}"'))
 
         case StepAction.CHECK:
-            sel = _esc(step.selector or "")
-            lines.append(f'{pad}await page.check("{sel}")')
+            sel = step.selector or ""
+            lines.append(_gen_action(sel, "check", pad))
 
         case StepAction.UNCHECK:
-            sel = _esc(step.selector or "")
-            lines.append(f'{pad}await page.uncheck("{sel}")')
+            sel = step.selector or ""
+            lines.append(_gen_action(sel, "uncheck", pad))
 
         case StepAction.PRESS:
-            sel = _esc(step.selector or "")
+            sel = step.selector or ""
             key = _esc(step.key or "")
-            lines.append(f'{pad}await page.press("{sel}", "{key}")')
+            lines.append(_gen_action(sel, "press", pad, f'"{key}"'))
 
         case StepAction.FILE_UPLOAD:
-            sel = _esc(step.selector or "")
+            sel = step.selector or ""
             files = step.files or []
             files_repr = repr(files)
-            lines.append(f'{pad}await page.set_input_files("{sel}", {files_repr})')
+            lines.append(_gen_action(sel, "set_input_files", pad, files_repr))
 
         case StepAction.HOVER:
-            sel = _esc(step.selector or "")
-            lines.append(f'{pad}await page.hover("{sel}")')
+            sel = step.selector or ""
+            lines.append(_gen_action(sel, "hover", pad))
 
         case StepAction.DBLCLICK:
-            sel = _esc(step.selector or "")
-            lines.append(f'{pad}await page.dblclick("{sel}")')
+            sel = step.selector or ""
+            lines.append(_gen_action(sel, "dblclick", pad))
 
         case StepAction.WAIT:
             lines.append(f"{pad}await page.wait_for_timeout(1000)")
@@ -231,30 +254,38 @@ def _generate_step_code(step: RecordedStep, indent: int = 4) -> list[str]:
     return lines
 
 
+def _locator_expression(selector: str) -> str:
+    """Return a Python expression that creates the correct Playwright locator."""
+    canonical, is_label = _normalize_selector_for_codegen(selector)
+    if is_label:
+        return f'page.get_by_label("{_esc(canonical)}")'
+    return f'page.locator("{_esc(canonical)}")'
+
+
 def _generate_assertion_code(assertion: AssertionStep, indent: int = 4) -> list[str]:
     """Generate Python code for a single assertion."""
     pad = " " * indent
     lines: list[str] = []
-    sel = _esc(assertion.selector or "")
+    locator = _locator_expression(assertion.selector or "")
     negate = ".not_" if assertion.negate else ""
 
     match assertion.assertion_type:
         case AssertionType.TO_BE_VISIBLE:
-            lines.append(f'{pad}await expect(page.locator("{sel}")){negate}.to_be_visible()')
+            lines.append(f'{pad}await expect({locator}){negate}.to_be_visible()')
 
         case AssertionType.TO_BE_HIDDEN:
-            lines.append(f'{pad}await expect(page.locator("{sel}")){negate}.to_be_hidden()')
+            lines.append(f'{pad}await expect({locator}){negate}.to_be_hidden()')
 
         case AssertionType.TO_HAVE_TEXT:
             val = _esc(assertion.expected_value or "")
             lines.append(
-                f'{pad}await expect(page.locator("{sel}")){negate}.to_have_text("{val}")'
+                f'{pad}await expect({locator}){negate}.to_have_text("{val}")'
             )
 
         case AssertionType.TO_CONTAIN_TEXT:
             val = _esc(assertion.expected_value or "")
             lines.append(
-                f'{pad}await expect(page.locator("{sel}")){negate}.to_contain_text("{val}")'
+                f'{pad}await expect({locator}){negate}.to_contain_text("{val}")'
             )
 
         case AssertionType.TO_HAVE_URL:
@@ -264,26 +295,26 @@ def _generate_assertion_code(assertion: AssertionStep, indent: int = 4) -> list[
         case AssertionType.TO_HAVE_COUNT:
             count = assertion.expected_count or 0
             lines.append(
-                f'{pad}await expect(page.locator("{sel}")){negate}.to_have_count({count})'
+                f'{pad}await expect({locator}){negate}.to_have_count({count})'
             )
 
         case AssertionType.TO_HAVE_VALUE:
             val = _esc(assertion.expected_value or "")
             lines.append(
-                f'{pad}await expect(page.locator("{sel}")){negate}.to_have_value("{val}")'
+                f'{pad}await expect({locator}){negate}.to_have_value("{val}")'
             )
 
         case AssertionType.TO_BE_CHECKED:
-            lines.append(f'{pad}await expect(page.locator("{sel}")){negate}.to_be_checked()')
+            lines.append(f'{pad}await expect({locator}){negate}.to_be_checked()')
 
         case AssertionType.TO_BE_ENABLED:
-            lines.append(f'{pad}await expect(page.locator("{sel}")){negate}.to_be_enabled()')
+            lines.append(f'{pad}await expect({locator}){negate}.to_be_enabled()')
 
         case AssertionType.TO_HAVE_ATTRIBUTE:
             attr = _esc(assertion.attribute_name or "")
             val = _esc(assertion.expected_value or "")
             lines.append(
-                f'{pad}await expect(page.locator("{sel}")){negate}'
+                f'{pad}await expect({locator}){negate}'
                 f'.to_have_attribute("{attr}", "{val}")'
             )
 

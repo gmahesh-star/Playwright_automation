@@ -37,6 +37,7 @@ from app.schemas.test_schemas import (
     StepResult,
     TestCaseResult,
 )
+from app.services.selectors import GET_BY_LABEL_PREFIX, canonicalize_selector
 from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -103,12 +104,36 @@ class TestRunner:
         run_id: uuid.UUID,
         browser_type: BrowserTypeEnum = BrowserTypeEnum.CHROMIUM,
         on_progress: Callable[..., Any] | None = None,
+        cancel_check: Callable[[], Any] | None = None,
     ) -> None:
         self.run_id = run_id
         self.browser_type = browser_type
         self._on_progress = on_progress
+        self._cancel_check = cancel_check
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
+
+    @staticmethod
+    def _wait_duration_ms(step: RecordedStep) -> int:
+        """Resolve a wait step duration, defaulting to 1s for legacy steps."""
+        if step.value:
+            try:
+                value = int(float(step.value))
+            except (TypeError, ValueError):
+                return 1000
+            return max(0, min(value, 60_000))
+        return 1000
+
+    async def _is_cancelled(self) -> bool:
+        if self._cancel_check is None:
+            return False
+        try:
+            result = self._cancel_check()
+            if asyncio.iscoroutine(result):
+                result = await result
+            return bool(result)
+        except Exception:
+            return False
 
     async def __aenter__(self) -> TestRunner:
         self._playwright = await async_playwright().start()
@@ -131,6 +156,19 @@ class TestRunner:
                 await self._playwright.stop()
             except Exception:
                 pass
+
+    @staticmethod
+    def _normalize_selector(selector: str) -> str:
+        """Convert non-standard recorder selectors to consistent Playwright selectors."""
+        return canonicalize_selector(selector) or ""
+
+    @staticmethod
+    def _get_locator(frame: "Page", selector: str):
+        """Return a Playwright locator for the given (normalized) selector."""
+        if selector.startswith(GET_BY_LABEL_PREFIX):
+            label_text = selector[len(GET_BY_LABEL_PREFIX):]
+            return frame.get_by_label(label_text)
+        return frame.locator(selector)
 
     async def run_test_case(
         self,
@@ -229,41 +267,126 @@ class TestRunner:
 
             page.on("dialog", _handle_dialog)
 
+            # Emit test case start event
+            if self._on_progress:
+                try:
+                    result = self._on_progress(
+                        type="test_case_start",
+                        run_id=str(self.run_id),
+                        test_case_id=str(test_case_id),
+                        test_case_name=test_case_name,
+                        total_steps=len(steps),
+                    )
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    pass
+
             # ── Execute steps ───────────────────────────────────────
+            step_failed = False
+            cancelled = False
             for idx, step in enumerate(steps):
+                if cancelled:
+                    skipped = StepResult(
+                        step_index=idx,
+                        action=step.action.value,
+                        status="skipped",
+                        error="Run cancelled",
+                    )
+                    step_results.append(skipped)
+                    if self._on_progress:
+                        await self._emit_progress(test_case_id, idx, skipped)
+                    continue
+
+                if step_failed:
+                    skipped = StepResult(
+                        step_index=idx,
+                        action=step.action.value,
+                        status="skipped",
+                        error="Not executed: previous step failed",
+                    )
+                    step_results.append(skipped)
+                    if self._on_progress:
+                        await self._emit_progress(test_case_id, idx, skipped)
+                    continue
+
+                if await self._is_cancelled():
+                    cancelled = True
+                    overall_status = "cancelled"
+                    overall_error = "Run cancelled"
+                    skipped = StepResult(
+                        step_index=idx,
+                        action=step.action.value,
+                        status="skipped",
+                        error="Run cancelled",
+                    )
+                    step_results.append(skipped)
+                    if self._on_progress:
+                        await self._emit_progress(test_case_id, idx, skipped)
+                    continue
+
                 step_start = time.monotonic()
                 sr = await self._execute_step(page, step, idx, test_case_id, baseline_screenshots)
                 sr.duration_ms = int((time.monotonic() - step_start) * 1000)
-                step_results.append(sr)
-
-                # Emit progress
-                if self._on_progress:
-                    await self._emit_progress(test_case_id, idx, sr)
 
                 if sr.status == "failed":
                     overall_status = "failed"
-                    overall_error = sr.error
-                    # Take failure screenshot
+                    step_failed = True
+                    if not overall_error:
+                        overall_error = sr.error
+                    # Take failure screenshot and attach it to the result.
                     fail_ss = StorageService.screenshot_path(
                         self.run_id, test_case_id, idx, suffix="_failure"
                     )
                     try:
                         await page.screenshot(path=str(fail_ss), full_page=True)
+                        sr.failure_screenshot_path = fail_ss.name
                     except Exception:
                         pass
-                    break
+
+                step_results.append(sr)
+
+                # Emit progress after the failure screenshot is attached.
+                if self._on_progress:
+                    await self._emit_progress(test_case_id, idx, sr)
 
             # ── Execute assertions ──────────────────────────────────
-            if assertions and overall_status == "passed":
-                for a_idx, assertion in enumerate(assertions):
-                    a_start = time.monotonic()
-                    a_result = await self._execute_assertion(page, assertion, len(steps) + a_idx)
-                    a_result.duration_ms = int((time.monotonic() - a_start) * 1000)
-                    step_results.append(a_result)
-                    if a_result.status == "failed":
-                        overall_status = "failed"
-                        overall_error = a_result.error
-                        break
+            if assertions:
+                if overall_status == "passed" and not cancelled:
+                    for a_idx, assertion in enumerate(assertions):
+                        if await self._is_cancelled():
+                            cancelled = True
+                            overall_status = "cancelled"
+                            overall_error = "Run cancelled"
+                            for rest_idx in range(a_idx, len(assertions)):
+                                step_results.append(
+                                    StepResult(
+                                        step_index=len(steps) + rest_idx,
+                                        action=f"assert_{assertions[rest_idx].assertion_type.value}",
+                                        status="skipped",
+                                        error="Run cancelled",
+                                    )
+                                )
+                            break
+                        a_start = time.monotonic()
+                        a_result = await self._execute_assertion(page, assertion, len(steps) + a_idx)
+                        a_result.duration_ms = int((time.monotonic() - a_start) * 1000)
+                        step_results.append(a_result)
+                        if a_result.status == "failed":
+                            overall_status = "failed"
+                            overall_error = a_result.error
+                            break
+                else:
+                    reason = "Run cancelled" if cancelled else "Not executed: previous step failed"
+                    for a_idx, assertion in enumerate(assertions):
+                        step_results.append(
+                            StepResult(
+                                step_index=len(steps) + a_idx,
+                                action=f"assert_{assertion.assertion_type.value}",
+                                status="skipped",
+                                error=reason,
+                            )
+                        )
 
             # ── Save auth state if needed ───────────────────────────
             if auth_profile_id and overall_status == "passed":
@@ -313,6 +436,9 @@ class TestRunner:
         try:
             timeout = step.timeout_ms
 
+            # Normalize the selector to handle legacy/custom engines
+            selector = self._normalize_selector(step.selector) if step.selector else None
+
             target_frame = page
             if step.frame_selector:
                 frame_el = await page.query_selector(step.frame_selector)
@@ -327,43 +453,52 @@ class TestRunner:
                         await page.goto(step.url, wait_until="domcontentloaded", timeout=timeout)
 
                 case StepAction.CLICK:
-                    if step.selector:
-                        await target_frame.click(step.selector, timeout=timeout)
+                    if selector:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.click(timeout=timeout)
 
                 case StepAction.FILL:
-                    if step.selector and step.value is not None:
-                        await target_frame.fill(step.selector, step.value, timeout=timeout)
+                    if selector and step.value is not None:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.fill(step.value, timeout=timeout)
 
                 case StepAction.SELECT_OPTION:
-                    if step.selector and step.value is not None:
-                        await target_frame.select_option(step.selector, step.value, timeout=timeout)
+                    if selector and step.value is not None:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.select_option(step.value, timeout=timeout)
 
                 case StepAction.CHECK:
-                    if step.selector:
-                        await target_frame.check(step.selector, timeout=timeout)
+                    if selector:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.check(timeout=timeout)
 
                 case StepAction.UNCHECK:
-                    if step.selector:
-                        await target_frame.uncheck(step.selector, timeout=timeout)
+                    if selector:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.uncheck(timeout=timeout)
 
                 case StepAction.PRESS:
-                    if step.selector and step.key:
-                        await target_frame.press(step.selector, step.key, timeout=timeout)
+                    if selector and step.key:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.press(step.key, timeout=timeout)
 
                 case StepAction.FILE_UPLOAD:
-                    if step.selector and step.files:
-                        await target_frame.set_input_files(step.selector, step.files, timeout=timeout)
+                    if selector and step.files:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.set_input_files(step.files, timeout=timeout)
 
                 case StepAction.HOVER:
-                    if step.selector:
-                        await target_frame.hover(step.selector, timeout=timeout)
+                    if selector:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.hover(timeout=timeout)
 
                 case StepAction.DBLCLICK:
-                    if step.selector:
-                        await target_frame.dblclick(step.selector, timeout=timeout)
+                    if selector:
+                        loc = self._get_locator(target_frame, selector)
+                        await loc.dblclick(timeout=timeout)
 
                 case StepAction.WAIT:
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(self._wait_duration_ms(step))
 
                 case StepAction.SCREENSHOT:
                     ss_path = StorageService.screenshot_path(
@@ -386,14 +521,16 @@ class TestRunner:
                                 action=step.action.value,
                                 status="failed",
                                 error=f"Visual diff {diff_pct:.2%} exceeds threshold {settings.VISUAL_DIFF_THRESHOLD:.2%}",
-                                screenshot_path=str(ss_path),
+                                screenshot_path=ss_path.name,
+                                diff_screenshot_path=diff_p.name,
                                 visual_diff_percent=diff_pct,
                             )
                         return StepResult(
                             step_index=index,
                             action=step.action.value,
                             status="passed",
-                            screenshot_path=str(ss_path),
+                            screenshot_path=ss_path.name,
+                            diff_screenshot_path=diff_p.name,
                             visual_diff_percent=diff_pct,
                         )
 
@@ -409,6 +546,7 @@ class TestRunner:
 
             # Visual regression if baseline exists
             visual_diff: float | None = None
+            diff_name: str | None = None
             if baseline_screenshots and str(index) in baseline_screenshots:
                 baseline_p = Path(baseline_screenshots[str(index)])
                 diff_p = StorageService.diff_screenshot_path(self.run_id, test_case_id, index)
@@ -416,13 +554,15 @@ class TestRunner:
                     ss_path, baseline_p, diff_p, settings.VISUAL_DIFF_THRESHOLD
                 )
                 visual_diff = diff_pct
+                diff_name = diff_p.name
                 if not passed:
                     return StepResult(
                         step_index=index,
                         action=step.action.value,
                         status="failed",
                         error=f"Visual diff {diff_pct:.2%} exceeds threshold {settings.VISUAL_DIFF_THRESHOLD:.2%}",
-                        screenshot_path=str(ss_path),
+                        screenshot_path=ss_path.name,
+                        diff_screenshot_path=diff_name,
                         visual_diff_percent=diff_pct,
                     )
 
@@ -430,7 +570,8 @@ class TestRunner:
                 step_index=index,
                 action=step.action.value,
                 status="passed",
-                screenshot_path=str(ss_path),
+                screenshot_path=ss_path.name,
+                diff_screenshot_path=diff_name,
                 visual_diff_percent=visual_diff,
             )
 
@@ -456,7 +597,8 @@ class TestRunner:
         """Execute a single assertion and return step-level result."""
         try:
             timeout = assertion.timeout_ms
-            locator = page.locator(assertion.selector) if assertion.selector else None
+            selector = canonicalize_selector(assertion.selector) if assertion.selector else None
+            locator = self._get_locator(page, selector) if selector else None
 
             match assertion.assertion_type:
                 case AssertionType.TO_BE_VISIBLE:
@@ -598,9 +740,11 @@ class TestRunner:
         if self._on_progress:
             try:
                 result = self._on_progress(
+                    type="step_progress",
                     run_id=str(self.run_id),
                     test_case_id=str(test_case_id),
                     step_index=step_index,
+                    action=sr.action,
                     status=sr.status,
                     duration_ms=sr.duration_ms,
                     error=sr.error,

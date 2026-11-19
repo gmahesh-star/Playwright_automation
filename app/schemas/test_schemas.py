@@ -5,9 +5,10 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -282,7 +283,7 @@ class AuthProfileOut(BaseModel):
     project_id: uuid.UUID
     name: str
     description: str | None
-    storage_state_path: str | None
+    has_storage_state: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -297,11 +298,20 @@ class StepResult(BaseModel):
 
     step_index: int
     action: str
-    status: str  # passed | failed | skipped
+    status: str  # passed | failed | skipped | cancelled
     duration_ms: int = 0
     error: str | None = None
     screenshot_path: str | None = None
+    failure_screenshot_path: str | None = None
+    diff_screenshot_path: str | None = None
     visual_diff_percent: float | None = None
+
+    @field_serializer(
+        "screenshot_path", "failure_screenshot_path", "diff_screenshot_path"
+    )
+    def _artifact_filename(self, value: str | None) -> str | None:
+        """Never expose server-local filesystem paths in API payloads."""
+        return Path(value).name if value else None
 
 
 class TestCaseResult(BaseModel):
@@ -309,7 +319,7 @@ class TestCaseResult(BaseModel):
 
     test_case_id: uuid.UUID
     test_case_name: str
-    status: str  # passed | failed | error
+    status: str  # passed | failed | error | skipped | cancelled
     duration_ms: int = 0
     step_results: list[StepResult] = Field(default_factory=list)
     error: str | None = None
@@ -332,11 +342,14 @@ class TestRunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     duration_ms: int | None
-    trace_path: str | None
-    video_path: str | None
-    report_path: str | None
     trigger_source: str | None
     created_at: datetime
+
+
+class CancelRunResponse(BaseModel):
+    run_id: uuid.UUID
+    status: str
+    message: str
 
 
 # ═══════════════════════════════════════════════════════════════════════

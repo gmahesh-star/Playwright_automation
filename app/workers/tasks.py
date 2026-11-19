@@ -15,7 +15,13 @@ from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.database import async_session_factory
-from app.models.test_models import RunStatus, TestCase, TestRun, TestSuite
+from app.models.test_models import (
+    RunStatus,
+    TestCase,
+    TestRun,
+    TestRunOptions,
+    TestSuite,
+)
 from app.schemas.test_schemas import (
     AssertionStep,
     BrowserTypeEnum,
@@ -26,6 +32,7 @@ from app.schemas.test_schemas import (
     StepResult,
     TestCaseResult,
 )
+from app.services.cancellation import clear_cancel, is_cancelled
 from app.services.runner import TestRunner
 from app.services.storage import StorageService
 
@@ -50,12 +57,46 @@ async def execute_test_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
     run_uuid = uuid.UUID(run_id)
     pubsub_channel = f"run:{run_id}:progress"
 
+    async def publish_complete(
+        status_value: RunStatus, duration_ms: int, results: list[TestCaseResult]
+    ) -> None:
+        await redis.publish(
+            pubsub_channel,
+            json.dumps(
+                {
+                    "type": "complete",
+                    "run_id": run_id,
+                    "status": status_value.value,
+                    "duration_ms": duration_ms,
+                    "results": [r.model_dump(mode="json") for r in results],
+                },
+                default=str,
+            ),
+        )
+
     async with async_session_factory() as session:
         # Fetch the run
         run = await session.get(TestRun, run_uuid)
         if not run:
             logger.error("TestRun %s not found", run_id)
             return {"error": "Run not found"}
+
+        if run.status == RunStatus.CANCELLED or await is_cancelled(run_id, redis):
+            run.status = RunStatus.CANCELLED
+            run.finished_at = datetime.now(timezone.utc)
+            run.duration_ms = 0
+            run.results = []
+            await session.commit()
+            await publish_complete(RunStatus.CANCELLED, 0, [])
+            await clear_cancel(run_id, redis)
+            return {
+                "run_id": run_id,
+                "status": "cancelled",
+                "duration_ms": 0,
+                "total_cases": 0,
+                "passed": 0,
+                "failed": 0,
+            }
 
         # Mark as running
         run.status = RunStatus.RUNNING
@@ -71,21 +112,60 @@ async def execute_test_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             return {"error": "Suite not found"}
 
         stmt = select(TestCase).where(TestCase.suite_id == suite.id).order_by(TestCase.created_at)
+
+        # Retry/rerun runs may target only a subset of the suite.
+        options = await session.get(TestRunOptions, run_uuid)
+        selected_ids: set[uuid.UUID] = set()
+        for raw_id in (options.test_case_ids or []) if options else []:
+            try:
+                selected_ids.add(uuid.UUID(str(raw_id)))
+            except (TypeError, ValueError):
+                continue
+        if selected_ids:
+            stmt = stmt.where(TestCase.id.in_(selected_ids))
+
         result = await session.execute(stmt)
         test_cases = list(result.scalars().all())
 
         if not test_cases:
-            run.status = RunStatus.PASSED
+            run.status = RunStatus.ERROR
             run.finished_at = datetime.now(timezone.utc)
             run.duration_ms = 0
             run.results = []
             await session.commit()
-            return {"status": "passed", "message": "No test cases to run"}
+            return {"status": "error", "message": "Suite has no test cases"}
+
+        if await is_cancelled(run_id, redis):
+            skipped_results = [
+                TestCaseResult(
+                    test_case_id=tc.id,
+                    test_case_name=tc.name,
+                    status="skipped",
+                    error="Run cancelled",
+                )
+                for tc in test_cases
+            ]
+            run.status = RunStatus.CANCELLED
+            run.finished_at = datetime.now(timezone.utc)
+            run.duration_ms = 0
+            run.results = [r.model_dump(mode="json") for r in skipped_results]
+            await session.commit()
+            await publish_complete(RunStatus.CANCELLED, 0, skipped_results)
+            await clear_cancel(run_id, redis)
+            return {
+                "run_id": run_id,
+                "status": "cancelled",
+                "duration_ms": 0,
+                "total_cases": len(test_cases),
+                "passed": 0,
+                "failed": 0,
+            }
 
     # ── Execute ─────────────────────────────────────────────────────
     browser_type = BrowserTypeEnum(run.browser.value if hasattr(run.browser, 'value') else run.browser)
     all_results: list[TestCaseResult] = []
     overall_status = RunStatus.PASSED
+    cancelled = False
     start_time = time.monotonic()
 
     async def publish_progress(**kwargs: Any) -> None:
@@ -93,13 +173,30 @@ async def execute_test_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         message = json.dumps(kwargs, default=str)
         await redis.publish(pubsub_channel, message)
 
+    async def cancel_requested() -> bool:
+        return await is_cancelled(run_id, redis)
+
     try:
         async with TestRunner(
             run_id=run_uuid,
             browser_type=browser_type,
             on_progress=publish_progress,
+            cancel_check=cancel_requested,
         ) as runner:
-            for tc in test_cases:
+            for tc_index, tc in enumerate(test_cases):
+                if await cancel_requested():
+                    cancelled = True
+                    for remaining in test_cases[tc_index:]:
+                        all_results.append(
+                            TestCaseResult(
+                                test_case_id=remaining.id,
+                                test_case_name=remaining.name,
+                                status="skipped",
+                                error="Run cancelled",
+                            )
+                        )
+                    break
+
                 steps = [RecordedStep(**s) for s in (tc.steps or [])]
                 assertions_data = tc.assertions or []
                 assertions = [AssertionStep(**a) for a in assertions_data] if assertions_data else None
@@ -122,8 +219,24 @@ async def execute_test_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 )
                 all_results.append(tc_result)
 
+                if tc_result.status == "cancelled":
+                    cancelled = True
+                    for remaining in test_cases[tc_index + 1:]:
+                        all_results.append(
+                            TestCaseResult(
+                                test_case_id=remaining.id,
+                                test_case_name=remaining.name,
+                                status="skipped",
+                                error="Run cancelled",
+                            )
+                        )
+                    break
+
                 if tc_result.status in ("failed", "error"):
                     overall_status = RunStatus.FAILED
+
+            if cancelled:
+                overall_status = RunStatus.CANCELLED
 
     except Exception as exc:
         overall_status = RunStatus.ERROR
@@ -161,18 +274,9 @@ async def execute_test_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
 
             await session.commit()
 
-    # Publish completion event
-    completion_msg = json.dumps(
-        {
-            "type": "complete",
-            "run_id": run_id,
-            "status": overall_status.value,
-            "duration_ms": duration_ms,
-            "results": [r.model_dump(mode="json") for r in all_results],
-        },
-        default=str,
-    )
-    await redis.publish(pubsub_channel, completion_msg)
+    # Publish completion event and clear any cancellation flag
+    await publish_complete(overall_status, duration_ms, all_results)
+    await clear_cancel(run_id, redis)
 
     return {
         "run_id": run_id,

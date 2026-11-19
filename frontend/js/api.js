@@ -105,6 +105,23 @@ const api = {
     if (!r.ok) throw new Error(await r.text());
     return r.json();
   },
+  async getRunsPage(params = {}) {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        qs.set(key, value);
+      }
+    });
+    const r = await fetch(`${API_BASE}/runs?${qs.toString()}`);
+    if (!r.ok) throw new Error(await r.text());
+    const runs = await r.json();
+    return {
+      runs,
+      total: Number(r.headers.get('X-Total-Count') ?? runs.length),
+      limit: Number(r.headers.get('X-Limit') ?? (params.limit || runs.length)),
+      offset: Number(r.headers.get('X-Offset') ?? (params.offset || 0)),
+    };
+  },
   async getRun(id) {
     const r = await fetch(`${API_BASE}/runs/${id}`);
     if (!r.ok) throw new Error(await r.text());
@@ -127,6 +144,16 @@ const api = {
     const r = await fetch(`${API_BASE}/runs/${id}`, { method: 'DELETE' });
     if (!r.ok && r.status !== 204) throw new Error(await r.text());
   },
+  async cancelRun(id) {
+    const r = await fetch(`${API_BASE}/runs/${id}/cancel`, { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async retryRun(id, mode = 'all') {
+    const r = await fetch(`${API_BASE}/runs/${id}/retry?mode=${mode}`, { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
   async getRunArtifacts(id) {
     const r = await fetch(`${API_BASE}/runs/${id}/artifacts`);
     if (!r.ok) throw new Error(await r.text());
@@ -143,6 +170,14 @@ const api = {
   async createAuthProfile(data) {
     const r = await fetch(`${API_BASE}/auth-profiles`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(data),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async updateAuthProfile(id, data) {
+    const r = await fetch(`${API_BASE}/auth-profiles/${id}`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(data),
     });
     if (!r.ok) throw new Error(await r.text());
@@ -172,13 +207,6 @@ const api = {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ assertion }),
     });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
-  },
-
-  // ── Artifacts ──────────────────────────────────────────────────
-  async getRunArtifacts(id) {
-    const r = await fetch(`${API_BASE}/runs/${id}/artifacts`);
     if (!r.ok) throw new Error(await r.text());
     return r.json();
   },

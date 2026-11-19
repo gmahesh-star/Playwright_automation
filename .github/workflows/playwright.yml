@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Install Playwright Browsers
         run: playwright install --with-deps
@@ -30,5 +30,4 @@ jobs:
       - name: Verify App & Run Tests
         run: |
           python -c "import app.main"
-          # Uncomment below once pytest test files are added:
-          # pytest
+          pytest

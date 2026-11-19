@@ -54,6 +54,26 @@ class StorageService:
         return dest / name
 
     @staticmethod
+    def screenshot_file(
+        run_id: uuid.UUID,
+        test_case_id: uuid.UUID,
+        step_index: int,
+        *,
+        kind: str = "step",
+    ) -> Path:
+        """Return an existing screenshot path without creating directories.
+
+        kind: "step" | "failure" | "diff"
+        """
+        suffix = {"step": "", "failure": "_failure", "diff": "_diff"}.get(kind, "")
+        return (
+            settings.screenshots_dir
+            / str(run_id)
+            / str(test_case_id)
+            / f"step_{step_index}{suffix}.png"
+        )
+
+    @staticmethod
     def baseline_screenshot_path(test_case_id: uuid.UUID, step_index: int) -> Path:
         dest = settings.screenshots_dir / "baselines" / str(test_case_id)
         dest.mkdir(parents=True, exist_ok=True)

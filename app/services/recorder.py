@@ -30,17 +30,17 @@ RECORDER_JS = r"""
   function bestSelector(el) {
     // Priority 1: data-testid
     const testId = el.getAttribute('data-testid') || el.getAttribute('data-test-id');
-    if (testId) return `[data-testid="${testId}"]`;
+    if (testId) return `[data-testid="${escAttr(testId)}"]`;
 
     // Priority 2: ARIA role + accessible name
     const role = el.getAttribute('role') || implicitRole(el);
-    const accName = el.getAttribute('aria-label') || el.innerText?.trim().substring(0, 50);
-    if (role && accName) return `role=${role}[name="${escQ(accName)}"]`;
+    const accName = accessibleName(el);
+    if (role && accName) return `role=${role}[name="${escAttr(accName)}"i]`;
 
     // Priority 3: label association (for inputs)
     if (el.id) {
       const label = document.querySelector(`label[for="${el.id}"]`);
-      if (label) return `label=${escQ(label.innerText.trim())}`;
+      if (label) return `internal:label="${escQ(label.innerText.trim())}"i`;
     }
 
     // Priority 4: placeholder
@@ -67,7 +67,33 @@ RECORDER_JS = r"""
     return map[tag] || null;
   }
 
-  function escQ(s) { return s.replace(/"/g, '\\"'); }
+  function normalizeText(s) { return (s || '').replace(/\s+/g, ' ').trim(); }
+
+  function accessibleName(el) {
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel && ariaLabel.trim()) return normalizeText(ariaLabel);
+
+    const labelledBy = el.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const text = labelledBy.split(/\s+/)
+        .map(id => document.getElementById(id))
+        .filter(Boolean)
+        .map(node => node.textContent || '')
+        .join(' ');
+      if (normalizeText(text)) return normalizeText(text);
+    }
+
+    if (el.tagName.toLowerCase() === 'img') {
+      const alt = el.getAttribute('alt');
+      if (alt) return normalizeText(alt);
+    }
+
+    return normalizeText(el.textContent || '');
+  }
+
+  function escAttr(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
+
+  function escQ(s) { return escAttr(s); }
 
   function cssSelectorPath(el) {
     const parts = [];
@@ -287,10 +313,26 @@ class RecorderSession:
         if self._step_callback:
             await self._maybe_await(self._step_callback(marker))
 
+    @staticmethod
+    def _compact_steps(steps: list[RecordedStep]) -> list[RecordedStep]:
+        compacted: list[RecordedStep] = []
+        for step in steps:
+            if (
+                compacted
+                and compacted[-1].action == StepAction.FILL
+                and step.action == StepAction.FILL
+                and compacted[-1].selector == step.selector
+            ):
+                compacted[-1] = step
+                continue
+            compacted.append(step)
+        return compacted
+
     async def stop(self) -> tuple[list[RecordedStep], int]:
         """Stop recording, close browser, and return captured steps."""
         self._running = False
         duration_ms = int((time.monotonic() - self._start_time) * 1000)
+        self.steps = self._compact_steps(self.steps)
 
         if self._page and not self._page.is_closed():
             try:

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.models.test_models import AuthProfile, Project, TestCase, TestSuite
 from app.schemas.test_schemas import (
+    AssertionStep,
     AuthProfileCreate,
     AuthProfileOut,
     AuthProfileUpdate,
@@ -19,6 +20,7 @@ from app.schemas.test_schemas import (
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
+    RecordedStep,
     TestCaseCreate,
     TestCaseOut,
     TestCaseUpdate,
@@ -27,9 +29,34 @@ from app.schemas.test_schemas import (
     TestSuiteUpdate,
 )
 from app.services.codegen import CodeGenerator
+from app.services.selectors import canonicalize_selector
 from app.services.storage import StorageService
 
 router = APIRouter(tags=["tests"])
+
+
+def _canonicalize_steps(
+    steps: list[RecordedStep | dict[str, Any]],
+) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for step in steps:
+        data = RecordedStep.model_validate(step).model_dump(mode="json")
+        if data.get("selector"):
+            data["selector"] = canonicalize_selector(data["selector"])
+        payload.append(data)
+    return payload
+
+
+def _canonicalize_assertions(
+    assertions: list[AssertionStep | dict[str, Any]],
+) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for assertion in assertions:
+        data = AssertionStep.model_validate(assertion).model_dump(mode="json")
+        if data.get("selector"):
+            data["selector"] = canonicalize_selector(data["selector"])
+        payload.append(data)
+    return payload
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -178,8 +205,8 @@ async def create_test_case(
         suite_id=body.suite_id,
         name=body.name,
         description=body.description,
-        steps=[s.model_dump(mode="json") for s in body.steps],
-        assertions=[a.model_dump(mode="json") for a in body.assertions] if body.assertions else [],
+        steps=_canonicalize_steps(body.steps),
+        assertions=_canonicalize_assertions(body.assertions) if body.assertions else [],
         device_config=body.device_config.model_dump(mode="json") if body.device_config else None,
         mock_rules=[m.model_dump(mode="json") for m in body.mock_rules] if body.mock_rules else [],
         auth_profile_id=body.auth_profile_id,
@@ -226,9 +253,9 @@ async def update_test_case(
     update_data = body.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         if field == "steps" and value is not None:
-            setattr(tc, field, [s.model_dump(mode="json") for s in value])
+            setattr(tc, field, _canonicalize_steps(value))
         elif field == "assertions" and value is not None:
-            setattr(tc, field, [a.model_dump(mode="json") for a in value])
+            setattr(tc, field, _canonicalize_assertions(value))
         elif field == "device_config" and value is not None:
             setattr(tc, field, value.model_dump(mode="json"))
         elif field == "mock_rules" and value is not None:
